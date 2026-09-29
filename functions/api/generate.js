@@ -10,7 +10,6 @@ export async function onRequestPost(context) {
     // ---------------------------------------------------------
     const body = await context.request.json();
 
-    // Required goal-generation fields
     const requiredFields = [
       "domain",
       "task",
@@ -33,15 +32,15 @@ export async function onRequestPost(context) {
     }
 
     // ---------------------------------------------------------
-    // 2. Get the secret API key from Cloudflare
+    // 2. Get Gemini API key from Cloudflare Secret
     // ---------------------------------------------------------
-    const apiKey = context.env.OPENAI_API_KEY;
+    const apiKey = context.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return new Response(
         JSON.stringify({
           error:
-            "OPENAI_API_KEY has not been configured in Cloudflare yet."
+            "GEMINI_API_KEY has not been configured in Cloudflare yet."
         }),
         {
           status: 500,
@@ -50,26 +49,13 @@ export async function onRequestPost(context) {
       );
     }
 
-    // We use GPT-6 Luna for efficient, repeatable generation.
-    // You can change this later through a Cloudflare variable.
-    const model = context.env.OPENAI_MODEL || "gpt-6-luna";
+    // Current Gemini model
+    const model = "gemini-3.8-flash";
 
     // ---------------------------------------------------------
-    // 3. IMPORTANT PRIVACY STEP
+    // 3. Privacy filter
     //
-    // Direct identifiers are deliberately NOT sent to the AI.
-    //
-    // We do NOT accept/send:
-    // - Student name / ID
-    // - Date of birth
-    // - Parent name
-    // - Address / contact number
-    // - School name / school ID
-    // - IEP number
-    // - SET name
-    //
-    // Only information relevant to educational goal generation
-    // is included below.
+    // Direct identifiers are NOT sent to Gemini.
     // ---------------------------------------------------------
     const educationalData = {
       special_need: body.specialNeed || "",
@@ -100,215 +86,214 @@ export async function onRequestPost(context) {
     };
 
     // ---------------------------------------------------------
-    // 4. Expert IEP instruction for the model
+    // 4. IEP expert instructions
     // ---------------------------------------------------------
-    const instructions = `
-You are an experienced Special Educator assisting a teacher in
-drafting an Individualised Education Plan (IEP).
+    const systemInstruction = `
+You are an experienced Special Educator assisting a teacher
+with drafting an Individualised Education Plan (IEP).
 
 The teacher is using a CBSE-style IEP format.
 
-Your task is to analyse the information supplied by the teacher
-and draft an educationally meaningful annual goal and progressive
-short-term goals.
+Your job is to analyse the teacher-provided information and draft
+a meaningful annual goal and progressive short-term goals.
 
 IMPORTANT RULES:
 
-1. Use ONLY information supplied by the teacher.
-2. Do not invent assessment scores, diagnoses, disability severity,
+1. Use ONLY information provided by the teacher.
+2. Never invent assessment scores, diagnoses, disability severity,
    medical conditions, legal rights, or CBSE entitlements.
-3. Do not assume a student's ability that is not stated.
-4. Do not make clinical or diagnostic decisions.
-5. The teacher/SET remains responsible for finalising the IEP.
-6. Use respectful, child-centred and non-stigmatising language.
-7. Goals must be observable and measurable.
-8. The annual goal must be directly connected to the baseline and
-   desired objective.
-9. Create exactly FOUR short-term goals.
-10. The short-term goals must show a logical progression from the
-    student's baseline toward the annual goal.
-11. Each short-term goal must contain:
-    - a suggested timeframe
-    - an observable behaviour/skill
-    - a measurable criterion
-    - an appropriate measurement method
-12. Do NOT automatically assume 80% or 90% accuracy unless the
-    available information supports such a criterion.
-13. Where the teacher has supplied a percentage, frequency, count,
-    duration, prompting level or similar baseline, use it when
-    designing the progression.
-14. Timeframes are professional suggestions only. They are NOT
-    presented as mandatory CBSE timelines.
-15. Suggest realistic TLM, teaching strategies, teaching procedure,
-    adaptations and evaluation methods when the supplied information
-    supports them.
-16. Keep the suggestions practical for school implementation.
-17. Distinguish an annual goal from short-term objectives.
-18. Do not include the student's name or any direct identifier in
-    the generated text.
+3. Do not make diagnostic or clinical decisions.
+4. Use respectful, child-centred, non-stigmatising language.
+5. The annual goal must directly relate to the student's baseline
+   and the desired skill.
+6. Create EXACTLY FOUR short-term goals.
+7. Short-term goals must progress logically from the baseline
+   toward the annual goal.
+8. Every short-term goal must include:
+   - suggested timeframe
+   - observable skill/behaviour
+   - measurable criterion
+   - measurement method
+9. Do NOT automatically assume 80% or 90% accuracy.
+10. Use numbers/percentages/frequencies/durations supplied by
+    the teacher whenever appropriate.
+11. Do not invent a prompting level unless the teacher provides it.
+12. Suggested timeframes are professional suggestions only and
+    are NOT mandatory CBSE timelines.
+13. Suggest practical TLM, teaching strategies, teaching procedure,
+    adaptations/accommodations/modifications, and evaluation.
+14. Keep goals realistic for school implementation.
+15. Make the goals observable and measurable.
+16. Do not include student names or other direct identifiers in
+    the generated goal text.
+17. The teacher/Special Educator must review the generated content
+    before putting it into the official IEP.
 
-Goal-writing approach:
+Goal-writing structure where appropriate:
 
-- Condition, when relevant
-- Target skill/behaviour
-- Criterion
-- Measurement
-- Independence/prompting, only when supported by the information
-- Timeframe
+Condition → Skill/Behaviour → Criterion → Measurement → Timeframe
 
-Return ONLY JSON that matches the supplied schema.
+Return ONLY valid JSON matching the requested schema.
 `;
 
     // ---------------------------------------------------------
-    // 5. Create the OpenAI Responses API request
+    // 5. Gemini REST API request
     // ---------------------------------------------------------
-    const openAIResponse = await fetch(
-      "https://api.openai.com/v1/responses",
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
+    const geminiURL =
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    const geminiResponse = await fetch(geminiURL, {
+      method: "POST",
+
+      headers: {
+        "x-goog-api-key": apiKey,
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        system_instruction: {
+          parts: [
+            {
+              text: systemInstruction
+            }
+          ]
         },
-        body: JSON.stringify({
-          model,
 
-          // Prevent the response from being stored as a response
-          // object for later retrieval.
-          store: false,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  "Teacher-provided IEP information:\n\n" +
+                  JSON.stringify(
+                    educationalData,
+                    null,
+                    2
+                  )
+              }
+            ]
+          }
+        ],
 
-          reasoning: {
-            effort: "low"
-          },
+        generationConfig: {
+          responseMimeType: "application/json",
 
-          instructions,
+          responseSchema: {
+            type: "object",
 
-          input:
-            "Teacher-provided IEP information:\n\n" +
-            JSON.stringify(educationalData, null, 2),
+            properties: {
+              annual_goal: {
+                type: "string"
+              },
 
-          // Structured Outputs makes the returned JSON predictable.
-          text: {
-            format: {
-              type: "json_schema",
-              name: "iep_goal_generation",
-              strict: true,
+              short_term_goals: {
+                type: "array",
 
-              schema: {
-                type: "object",
+                items: {
+                  type: "object",
 
-                properties: {
-                  annual_goal: {
-                    type: "string"
-                  },
+                  properties: {
+                    timeframe: {
+                      type: "string"
+                    },
 
-                  short_term_goals: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        timeframe: {
-                          type: "string"
-                        },
-                        goal: {
-                          type: "string"
-                        },
-                        measurement: {
-                          type: "string"
-                        }
-                      },
-                      required: [
-                        "timeframe",
-                        "goal",
-                        "measurement"
-                      ],
-                      additionalProperties: false
+                    goal: {
+                      type: "string"
+                    },
+
+                    measurement: {
+                      type: "string"
                     }
                   },
 
-                  timeframe_note: {
-                    type: "string"
-                  },
+                  required: [
+                    "timeframe",
+                    "goal",
+                    "measurement"
+                  ]
+                }
+              },
 
-                  tlm: {
-                    type: "string"
-                  },
+              timeframe_note: {
+                type: "string"
+              },
 
-                  teaching_strategies: {
-                    type: "string"
-                  },
+              tlm: {
+                type: "string"
+              },
 
-                  teaching_procedure: {
-                    type: "string"
-                  },
+              teaching_strategies: {
+                type: "string"
+              },
 
-                  adaptations: {
-                    type: "string"
-                  },
+              teaching_procedure: {
+                type: "string"
+              },
 
-                  evaluation: {
-                    type: "string"
-                  }
-                },
+              adaptations: {
+                type: "string"
+              },
 
-                required: [
-                  "annual_goal",
-                  "short_term_goals",
-                  "timeframe_note",
-                  "tlm",
-                  "teaching_strategies",
-                  "teaching_procedure",
-                  "adaptations",
-                  "evaluation"
-                ],
-
-                additionalProperties: false
+              evaluation: {
+                type: "string"
               }
-            }
+            },
+
+            required: [
+              "annual_goal",
+              "short_term_goals",
+              "timeframe_note",
+              "tlm",
+              "teaching_strategies",
+              "teaching_procedure",
+              "adaptations",
+              "evaluation"
+            ]
+          },
+
+          // Lower reasoning level keeps testing economical.
+          thinkingConfig: {
+            thinkingLevel: "low"
           }
-        })
-      }
-    );
+        }
+      })
+    });
 
     // ---------------------------------------------------------
-    // 6. Read the OpenAI response
+    // 6. Read Gemini response
     // ---------------------------------------------------------
-    const result = await openAIResponse.json();
+    const result = await geminiResponse.json();
 
-    if (!openAIResponse.ok) {
+    if (!geminiResponse.ok) {
       const message =
         result?.error?.message ||
-        "The AI service returned an error.";
+        "Gemini API returned an error.";
 
       return new Response(
         JSON.stringify({
           error: message
         }),
         {
-          status: openAIResponse.status,
+          status: geminiResponse.status,
           headers
         }
       );
     }
 
+    // Gemini places generated text inside:
+    // candidates[0].content.parts[0].text
     let outputText = "";
 
-    if (typeof result.output_text === "string") {
-      outputText = result.output_text;
-    }
+    const parts =
+      result?.candidates?.[0]?.content?.parts;
 
-    // Fallback parser if output_text is unavailable.
-    if (!outputText && Array.isArray(result.output)) {
-      for (const item of result.output) {
-        if (!Array.isArray(item.content)) continue;
-
-        for (const part of item.content) {
-          if (
-            part.type === "output_text" &&
-            typeof part.text === "string"
-          ) {
-            outputText += part.text;
-          }
+    if (Array.isArray(parts)) {
+      for (const part of parts) {
+        if (
+          typeof part.text === "string"
+        ) {
+          outputText += part.text;
         }
       }
     }
@@ -318,7 +303,8 @@ Return ONLY JSON that matches the supplied schema.
     if (!outputText) {
       return new Response(
         JSON.stringify({
-          error: "The AI returned an empty response."
+          error:
+            "Gemini returned an empty response."
         }),
         {
           status: 502,
@@ -328,7 +314,7 @@ Return ONLY JSON that matches the supplied schema.
     }
 
     // ---------------------------------------------------------
-    // 7. Parse the structured JSON returned by the model
+    // 7. Parse structured JSON
     // ---------------------------------------------------------
     let generated;
 
@@ -338,7 +324,7 @@ Return ONLY JSON that matches the supplied schema.
       return new Response(
         JSON.stringify({
           error:
-            "The AI returned an unexpected format. Please try again."
+            "Gemini returned an unexpected format. Please try again."
         }),
         {
           status: 502,
@@ -348,7 +334,7 @@ Return ONLY JSON that matches the supplied schema.
     }
 
     // ---------------------------------------------------------
-    // 8. Return the generated IEP suggestions to the browser
+    // 8. Return generated goals to browser
     // ---------------------------------------------------------
     return new Response(
       JSON.stringify(generated),
@@ -362,7 +348,7 @@ Return ONLY JSON that matches the supplied schema.
     return new Response(
       JSON.stringify({
         error:
-          "Unexpected server error while generating the IEP goals."
+          "Unexpected server error while generating IEP goals."
       }),
       {
         status: 500,
